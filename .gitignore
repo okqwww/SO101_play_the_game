@@ -177,3 +177,14 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+
+no_use/
+cursor_docs/
+cursor_conversation/
+benchmarks/
+.cursor/
+outputs/
+coordinate_transformer.py
+mole_detector.py
+whack_a_mole.py

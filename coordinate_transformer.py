@@ -3,172 +3,194 @@
 坐标转换工具类
 ============
 
-提供相机坐标系和机械臂基座坐标系之间的转换功能
+提供像素坐标到机械臂基座坐标系之间的转换功能。
+使用 OpenCV 相机内参 + 手眼标定 + 已知桌面高度，无需深度相机。
+
+方法: 第一阶段的直接推广
+  - 已知: 相机内参(fx,fy,cx,cy), 手眼标定(T_cam_to_base), 桌面高度(table_height)
+  - 对于任意像素(u,v):
+    1. 计算深度 depth = camera_height - table_height（相机近似垂直朝下）
+    2. 相机坐标系中的3D点: [(u-cx)/fx * depth, (v-cy)/fy * depth, depth]
+    3. 用 T_cam_to_base 变换到基座坐标系
+    4. 将Z坐标设为桌面高度
 """
 
 import numpy as np
 import json
-import pyrealsense2 as rs
 from pathlib import Path
-from typing import Tuple
 
 
 class CoordinateTransformer:
-    """坐标转换器"""
-    
+    """像素坐标到机器人基座坐标的转换器（无需深度相机）"""
+
     def __init__(
         self,
-        calibration_file: str = "outputs/camera_to_base_calibration.json"
+        intrinsics_file: str = "outputs/cheap_camera_intrinsics.json",
+        calibration_file: str = "outputs/camera_to_base_calibration.json",
+        table_height_file: str = "outputs/table_height.json",
     ):
         """
-        初始化转换器
-        
+        初始化转换器，加载所有标定数据。
+
         Args:
+            intrinsics_file: 相机内参文件
             calibration_file: 手眼标定结果文件
+            table_height_file: 桌面高度标定文件
         """
-        # 加载手眼标定结果
+        # 1. 加载相机内参
+        with open(intrinsics_file) as f:
+            intrinsics = json.load(f)
+        camera_matrix = np.array(intrinsics["camera_matrix"])
+        self.fx = camera_matrix[0, 0]
+        self.fy = camera_matrix[1, 1]
+        self.cx = camera_matrix[0, 2]
+        self.cy = camera_matrix[1, 2]
+        self.image_width = intrinsics["image_width"]
+        self.image_height = intrinsics["image_height"]
+
+        # 2. 加载手眼标定
         with open(calibration_file) as f:
             calib_data = json.load(f)
-            self.T_cam_to_base = np.array(calib_data["T_cam_to_base"])
-            self.T_base_to_cam = np.linalg.inv(self.T_cam_to_base)
-            
+        self.T_cam_to_base = np.array(calib_data["T_cam_to_base"])
+        self.T_base_to_cam = np.linalg.inv(self.T_cam_to_base)
+
+        # 3. 加载桌面高度
+        with open(table_height_file) as f:
+            table_data = json.load(f)
+        self.table_height = table_data["table_height_base"]
+
+        # 4. 计算相机到桌面的深度（相机Z方向距离的近似值）
+        camera_pos_base = self.T_cam_to_base[:3, 3]
+        self.depth_camera = camera_pos_base[2] - self.table_height
+
         print("✅ 坐标转换器已初始化")
-        print(f"   相机位置 (相对于基座): {calib_data['translation_m']}")
-        
-    def pixel_to_camera_3d(
-        self,
-        pixel_x: int,
-        pixel_y: int,
-        depth: float,
-        camera_intrinsics: rs.intrinsics
-    ) -> np.ndarray:
+        print(f"   相机内参: fx={self.fx:.1f}, fy={self.fy:.1f}, cx={self.cx:.1f}, cy={self.cy:.1f}")
+        print(f"   相机位置(基座系): [{camera_pos_base[0]:.3f}, {camera_pos_base[1]:.3f}, {camera_pos_base[2]:.3f}] m")
+        print(f"   桌面高度: {self.table_height * 1000:.1f} mm")
+        print(f"   相机到桌面深度: {self.depth_camera * 1000:.1f} mm")
+
+    def pixel_to_base_3d(self, pixel_x: float, pixel_y: float) -> np.ndarray:
         """
-        将像素坐标+深度转换为相机坐标系的3D坐标
-        
+        将像素坐标转换为机械臂基座坐标系的3D坐标。
+
+        使用第一阶段验证过的方法:
+          1. 将像素(u,v)通过内参反投影到相机坐标系的3D点
+          2. 用 T_cam_to_base 变换到基座坐标系
+          3. Z坐标设为桌面高度
+
         Args:
-            pixel_x, pixel_y: 像素坐标
-            depth: 深度值（米）
-            camera_intrinsics: 相机内参
-            
+            pixel_x: 像素X坐标 (u)
+            pixel_y: 像素Y坐标 (v)
+
         Returns:
-            [x, y, z] 在相机坐标系中的坐标（米）
+            [x, y, z] 在机械臂基座坐标系中的3D坐标（米）
         """
-        # 使用RealSense SDK的反投影函数
-        point_3d_camera = rs.rs2_deproject_pixel_to_point(
-            camera_intrinsics,
-            [pixel_x, pixel_y],
-            depth
-        )
-        
-        return np.array(point_3d_camera)
-        
-    def camera_to_base(self, point_camera: np.ndarray) -> np.ndarray:
+        depth = self.depth_camera
+
+        # 相机坐标系中的3D点（与第一阶段 compute_camera_center_3d 方法一致）
+        x_cam = (pixel_x - self.cx) / self.fx * depth
+        y_cam = (pixel_y - self.cy) / self.fy * depth
+        z_cam = depth
+
+        point_cam = np.array([x_cam, y_cam, z_cam, 1.0])
+
+        # 变换到基座坐标系
+        point_base = self.T_cam_to_base @ point_cam
+
+        # Z坐标设为桌面高度（确保在桌面上）
+        point_base[2] = self.table_height
+
+        return point_base[:3]
+
+    def pixel_to_base_3d_batch(self, pixels: np.ndarray) -> np.ndarray:
         """
-        将相机坐标系的点转换到机械臂基座坐标系
-        
+        批量将像素坐标转换为基座坐标系3D坐标。
+
         Args:
-            point_camera: [x, y, z] 在相机坐标系中的坐标（米）
-            
+            pixels: Nx2 数组，每行是 [pixel_x, pixel_y]
+
         Returns:
-            [x, y, z] 在机械臂基座坐标系中的坐标（米）
+            Nx3 数组，每行是 [x, y, z] 在基座坐标系中（米）
         """
-        # 转换为齐次坐标
-        point_camera_homo = np.array([*point_camera, 1.0])
-        
-        # 应用变换矩阵
-        point_base_homo = self.T_cam_to_base @ point_camera_homo
-        
-        return point_base_homo[:3]
-        
-    def base_to_camera(self, point_base: np.ndarray) -> np.ndarray:
+        results = np.zeros((len(pixels), 3))
+        for i, (px, py) in enumerate(pixels):
+            results[i] = self.pixel_to_base_3d(px, py)
+        return results
+
+    def base_to_pixel(self, point_base: np.ndarray) -> tuple[float, float]:
         """
-        将机械臂基座坐标系的点转换到相机坐标系
-        
+        将基座坐标系的3D点投影到像素坐标。
+        （反向转换，用于可视化验证）
+
         Args:
             point_base: [x, y, z] 在机械臂基座坐标系中的坐标（米）
-            
+
         Returns:
-            [x, y, z] 在相机坐标系中的坐标（米）
+            (pixel_x, pixel_y) 像素坐标
         """
-        # 转换为齐次坐标
+        # 基座 -> 相机坐标系
         point_base_homo = np.array([*point_base, 1.0])
-        
-        # 应用逆变换矩阵
-        point_camera_homo = self.T_base_to_cam @ point_base_homo
-        
-        return point_camera_homo[:3]
-        
-    def pixel_to_base(
-        self,
-        pixel_x: int,
-        pixel_y: int,
-        depth: float,
-        camera_intrinsics: rs.intrinsics
-    ) -> np.ndarray:
+        point_cam = self.T_base_to_cam @ point_base_homo
+
+        # 相机坐标系 -> 像素
+        if abs(point_cam[2]) < 1e-6:
+            return float("nan"), float("nan")
+
+        pixel_x = self.fx * point_cam[0] / point_cam[2] + self.cx
+        pixel_y = self.fy * point_cam[1] / point_cam[2] + self.cy
+
+        return float(pixel_x), float(pixel_y)
+
+    def verify_center_pixel(self) -> dict:
         """
-        一步到位：像素坐标+深度 → 机械臂基座坐标系
-        
-        Args:
-            pixel_x, pixel_y: 像素坐标
-            depth: 深度值（米）
-            camera_intrinsics: 相机内参
-            
+        验证: 对相机中心像素(cx, cy)的转换结果应与第一阶段一致。
+
         Returns:
-            [x, y, z] 在机械臂基座坐标系中的坐标（米）
+            包含验证结果的字典
         """
-        # 第一步：像素→相机3D
-        point_camera = self.pixel_to_camera_3d(
-            pixel_x, pixel_y, depth, camera_intrinsics
-        )
-        
-        # 第二步：相机3D→基座3D
-        point_base = self.camera_to_base(point_camera)
-        
-        return point_base
-        
-    def visualize_transform(
-        self,
-        point_camera: np.ndarray,
-        point_base: np.ndarray
-    ):
-        """可视化坐标转换"""
-        print("\n坐标转换:")
-        print(f"  相机坐标系: X={point_camera[0]:.3f}m, Y={point_camera[1]:.3f}m, Z={point_camera[2]:.3f}m")
-        print(f"  基座坐标系: X={point_base[0]:.3f}m, Y={point_base[1]:.3f}m, Z={point_base[2]:.3f}m")
+        center_pos = self.pixel_to_base_3d(self.cx, self.cy)
+
+        print("\n🔍 验证: 相机中心像素转换")
+        print(f"   中心像素: ({self.cx:.1f}, {self.cy:.1f})")
+        print(f"   基座坐标: [{center_pos[0] * 1000:.1f}, {center_pos[1] * 1000:.1f}, {center_pos[2] * 1000:.1f}] mm")
+        print(f"   (应与第一阶段目标位置 [230.6, 45.2, -7.9] mm 一致)")
+
+        return {
+            "center_pixel": (self.cx, self.cy),
+            "base_position_m": center_pos.tolist(),
+            "base_position_mm": (center_pos * 1000).tolist(),
+        }
 
 
-# 使用示例
-def example_usage():
-    """使用示例"""
-    
-    # 1. 初始化转换器
-    transformer = CoordinateTransformer("outputs/camera_to_base_calibration.json")
-    
-    # 2. 模拟相机内参（实际使用时从RealSense获取）
-    class MockIntrinsics:
-        def __init__(self):
-            self.fx = 900.0
-            self.fy = 900.0
-            self.ppx = 640.0
-            self.ppy = 360.0
-    
-    intrinsics = MockIntrinsics()
-    
-    # 3. 示例：检测到地鼠在像素 (320, 240)，深度 0.5m
-    pixel_x, pixel_y = 320, 240
-    depth = 0.5  # 米
-    
-    # 4. 转换到基座坐标系
-    point_base = transformer.pixel_to_base(pixel_x, pixel_y, depth, intrinsics)
-    
-    print(f"\n地鼠位置（基座坐标系）: {point_base}")
-    print(f"  X: {point_base[0]:.3f} m")
-    print(f"  Y: {point_base[1]:.3f} m")
-    print(f"  Z: {point_base[2]:.3f} m")
-    
-    # 5. 现在可以用这个坐标控制机械臂
-    print("\n可以发送给机械臂的目标位置已准备好！")
+def main():
+    """验证坐标转换器"""
+    print("=" * 60)
+    print("坐标转换器验证")
+    print("=" * 60)
+
+    transformer = CoordinateTransformer()
+
+    # 验证1: 相机中心像素
+    result = transformer.verify_center_pixel()
+
+    # 验证2: 几个关键点
+    print("\n" + "=" * 60)
+    print("多点转换测试")
+    print("=" * 60)
+
+    test_pixels = [
+        (transformer.cx, transformer.cy),   # 中心
+        (0, 0),                               # 左上角
+        (transformer.image_width, 0),         # 右上角
+        (0, transformer.image_height),        # 左下角
+        (transformer.image_width, transformer.image_height),  # 右下角
+        (640, 360),                           # 图像中心（若不是主点）
+    ]
+
+    for px, py in test_pixels:
+        pos = transformer.pixel_to_base_3d(px, py)
+        print(f"  像素 ({px:7.1f}, {py:7.1f}) -> 基座 [{pos[0] * 1000:7.1f}, {pos[1] * 1000:7.1f}, {pos[2] * 1000:7.1f}] mm")
 
 
 if __name__ == "__main__":
-    example_usage()
+    main()
