@@ -185,7 +185,7 @@ def calibrate_camera():
     
     print(f"\n✅ 内参已保存到: {output_file}")
     print(f"✅ 标定图像已保存到: {calib_dir}")
-    print("\n下一步：使用 hand_eye_calibration_opencv.py 进行手眼标定")
+    print("\n下一步：使用 python stage1_test/calib/hand_eye_calibration_opencv.py 进行手眼标定")
 
 if __name__ == "__main__":
     calibrate_camera()

@@ -507,9 +507,9 @@ def main():
     except FileNotFoundError as e:
         print(f"\n❌ Error: {e}")
         print("\nMissing calibration file. Please complete:")
-        print("  1. Camera intrinsics: python calibrate_cheap_camera_phone.py")
-        print("  2. Hand-eye calibration: python hand_eye_calibration_opencv.py")
-        print("  3. Table height: python calibrate_table_height_direct.py")
+        print("  1. Camera intrinsics: python stage1_test/calib/calibrate_cheap_camera_phone.py")
+        print("  2. Hand-eye calibration: python stage1_test/calib/hand_eye_calibration_opencv.py")
+        print("  3. Table height: python stage1_test/calib/calibrate_table_height_direct.py")
     except KeyboardInterrupt:
         print("\n\n❌ Test cancelled by user")
     except Exception as e:

@@ -256,7 +256,7 @@ def main():
         
         if len(solver.calibration_data) < 3:
             print("\n❌ 错误：至少需要3组标定数据")
-            print("   请先运行 hand_eye_calibration.py 采集数据")
+            print("   请先运行 python stage1_test/calib/hand_eye_calibration_opencv.py 采集数据")
             return
             
         # 求解并评估
@@ -274,7 +274,7 @@ def main():
         
     except FileNotFoundError:
         print("\n❌ 错误：找不到标定数据文件")
-        print("   请先运行 hand_eye_calibration.py 采集数据")
+        print("   请先运行 python stage1_test/calib/hand_eye_calibration_opencv.py 采集数据")
     except Exception as e:
         print(f"\n❌ 错误：{e}")
         import traceback
