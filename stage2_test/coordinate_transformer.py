@@ -99,8 +99,28 @@ class CoordinateTransformer:
 
         # Z坐标设为桌面高度（确保在桌面上）
         point_base[2] = self.table_height
-
+        # 注意: 原先此处有手动补偿 CORRECTION_X/Y，
+        # 现已改为用 FKCorrector（基于 check_urdf_error 数据拟合的仿射校正）
+        # 补偿在 whack_a_mole.py / tap_one_mole.py 中调用 fk_corr.target_for_ik() 实现
         return point_base[:3]
+
+    def update_depth_from_apriltag(self, depth_m: float):
+        """
+        用 AprilTag 实时测量的深度更新转换器参数。
+
+        Args:
+            depth_m: 相机到底板表面的深度（米），来自 AprilTagLocator.locate() 的第二个返回值
+
+        注意：
+          - 仅需在每次「底板位置可能改变」时调用（如每局游戏开始时）
+          - 相机与机械臂基座的关系（T_cam_to_base）不变，无需重新标定
+        """
+        old_depth = self.depth_camera
+        camera_pos_base = self.T_cam_to_base[:3, 3]
+        self.depth_camera = float(depth_m)
+        self.table_height = camera_pos_base[2] - self.depth_camera
+        print(f"   深度更新: {old_depth * 1000:.1f} mm → {self.depth_camera * 1000:.1f} mm  "
+              f"(桌面高度: {self.table_height * 1000:.1f} mm)")
 
     def pixel_to_base_3d_batch(self, pixels: np.ndarray) -> np.ndarray:
         """

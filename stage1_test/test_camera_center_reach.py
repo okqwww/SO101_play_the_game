@@ -189,7 +189,12 @@ def compute_camera_center_3d(camera_matrix, T_cam_to_base, table_height):
     
     # Set Z to exactly table height (to ensure contact)
     point_base[2] = table_height
-    
+    # ── 系统性手眼标定误差补偿 ──
+    # 手眼标定 t_y 偏大约 10mm，导致目标 Y 坐标系统性偏大
+    CORRECTION_Y = -0.0035 # 单位：米，机器人实际点击偏Y+则填负值
+    point_base[1] += CORRECTION_Y
+    CORRECTION_X = 0.013
+    point_base[0] += CORRECTION_X
     print(f"\n✅ Target position in base frame:")
     print(f"   X: {point_base[0]*1000:.1f} mm")
     print(f"   Y: {point_base[1]*1000:.1f} mm")
@@ -444,10 +449,10 @@ def main():
         print("\n" + "="*60)
         print("Initializing Kinematics Solver")
         print("="*60)
-        urdf_path = "SO101/so101_5dof_stylus.urdf"
+        urdf_path = "SO101/so101_5dof_stylus_2.urdf"
         kinematics = RobotKinematics(
             urdf_path=urdf_path,
-            target_frame_name="stylus_tip_link",
+            target_frame_name="stylus_tcp_link",
             joint_names=["shoulder_pan", "shoulder_lift", "elbow_flex",
                         "wrist_flex", "wrist_roll"]
         )

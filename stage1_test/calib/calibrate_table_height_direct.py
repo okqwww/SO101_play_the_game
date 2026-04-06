@@ -35,8 +35,8 @@ def main():
     # Initialize kinematics
     print("Initializing kinematics solver...")
     kinematics = RobotKinematics(
-        urdf_path="SO101/so101_5dof_stylus.urdf",
-        target_frame_name="stylus_tip_link",  # FK calculates stylus tip position
+        urdf_path="SO101/so101_5dof_stylus_2.urdf",
+        target_frame_name="stylus_tcp_link",  # FK calculates stylus tip position
         joint_names=["shoulder_pan", "shoulder_lift", "elbow_flex",
                     "wrist_flex", "wrist_roll"]
     )

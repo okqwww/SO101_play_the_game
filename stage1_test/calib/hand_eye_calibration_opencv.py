@@ -3,6 +3,7 @@
 Eye-to-hand 手眼标定系统 - OpenCV相机版本
 """
 
+import sys
 import numpy as np
 import cv2
 import json
@@ -25,7 +26,7 @@ class HandEyeCalibratorOpenCV:
         robot_port: str = "/dev/ttyACM0",
         camera_index: int = 0,  # 相机索引
         camera_intrinsics_file: str = "outputs/cheap_camera_intrinsics.json",  # 内参文件
-        urdf_path: str = "SO101/so101_5dof_stylus.urdf",
+        urdf_path: str = "SO101/so101_5dof_stylus_2.urdf",
         checkerboard_size: Tuple[int, int] = (11, 8),
         square_size: float = 0.005,
     ):
@@ -68,11 +69,22 @@ class HandEyeCalibratorOpenCV:
         print("初始化运动学求解器...")
         self.kinematics = RobotKinematics(
             urdf_path=urdf_path,
-            target_frame_name = "stylus_tip_link",
+            target_frame_name = "stylus_tcp_link",
             joint_names=["shoulder_pan", "shoulder_lift", "elbow_flex",
                         "wrist_flex", "wrist_roll"]
         )
-        
+
+        # 加载 FK 校正（若存在），使标定时用的机械臂位姿更接近真实物理位置
+        # fk_corrector.py 在 stage2_test/ 下
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "stage2_test"))
+        try:
+            from fk_corrector import FKCorrector
+            self.fk_corrector = FKCorrector.load("outputs/fk_correction.json")
+            print("  ✅ 已加载 FK 校正参数（标定将使用校正后的机械臂位姿）")
+        except FileNotFoundError:
+            self.fk_corrector = None
+            print("  ℹ️  未找到 FK 校正文件，标定将使用原始 FK 位姿")
+
         # 存储标定数据
         self.calibration_data = []
         
@@ -102,6 +114,14 @@ class HandEyeCalibratorOpenCV:
         ])
         
         T_base_to_end = self.kinematics.forward_kinematics(joint_positions)
+
+        # 应用 FK 校正：将 FK 计算的末端位置校正为更接近真实物理位置
+        # 这样手眼标定时机械臂位姿与实际物理位姿更一致，减少标定误差
+        if self.fk_corrector is not None:
+            pos_mm = T_base_to_end[:3, 3] * 1000
+            corrected_mm = self.fk_corrector.correct_fk(pos_mm)
+            T_base_to_end[:3, 3] = corrected_mm / 1000
+
         return T_base_to_end
         
     def detect_checkerboard_pnp(
